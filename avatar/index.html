@@ -43,6 +43,7 @@
     scene.add(new THREE.AmbientLight(0xffffff, 0.6));
 
     let currentVrm = undefined;
+    let isSpeaking = false;
 
     const loader = new GLTFLoader();
     loader.register((parser) => new VRMLoaderPlugin(parser));
@@ -54,7 +55,6 @@
         scene.add(vrm.scene);
         currentVrm = vrm;
         console.log('Avatar loaded!');
-        console.log('Available expressions:', Object.keys(vrm.expressionManager.expressions));
       },
       (progress) => console.log('Loading...', (100 * progress.loaded / progress.total).toFixed(0), '%'),
       (error) => console.error('Error loading avatar:', error)
@@ -64,17 +64,15 @@
       return currentVrm?.humanoid?.getNormalizedBoneNode(name);
     }
 
-    // ---- Idle blink ----
     let blinkTimer = 0;
     let nextBlinkAt = 2 + Math.random() * 3;
     const clock = new THREE.Clock();
 
-    // ---- Gesture system ----
     let currentGesture = null;
     let gestureStartTime = 0;
     let gestureDuration = 0;
     let gestureTimer = 0;
-    let nextGestureAt = 3 + Math.random() * 4;
+    let nextGestureAt = 3 + Math.random() * 3;
 
     const GESTURES = ['wave', 'wink', 'smile', 'lookAway', 'tease'];
 
@@ -102,7 +100,7 @@
       if (head) head.rotation.set(0, 0, 0);
     }
 
-    function updateGesture(elapsed, t_delta) {
+    function updateGesture(elapsed) {
       if (!currentVrm || !currentGesture) return;
       const t = elapsed - gestureStartTime;
       const progress = Math.min(t / gestureDuration, 1);
@@ -139,11 +137,10 @@
         currentVrm.expressionManager?.setValue('happy', 0.0);
         currentGesture = null;
         gestureTimer = 0;
-        nextGestureAt = 4 + Math.random() * 5;
+        nextGestureAt = 3 + Math.random() * 3;
       }
     }
 
-    // Click the avatar to force an instant tease
     renderer.domElement.addEventListener('click', () => {
       if (!currentGesture) startGesture('tease');
     });
@@ -154,9 +151,15 @@
       const elapsed = clock.getElapsedTime();
 
       if (currentVrm) {
+        // breathing
         currentVrm.scene.position.y = Math.sin(elapsed * 1.2) * 0.01;
 
-        // idle blink, skipped if a wink/tease gesture is already controlling the eye
+        // subtle head bob while speaking, feels more human
+        const head = getBone('head');
+        if (head && isSpeaking && currentGesture !== 'lookAway') {
+          head.rotation.x = Math.sin(elapsed * 6) * 0.03;
+        }
+
         if (currentGesture !== 'wink' && currentGesture !== 'tease') {
           blinkTimer += delta;
           if (blinkTimer > nextBlinkAt) {
@@ -173,7 +176,7 @@
         if (!currentGesture && gestureTimer > nextGestureAt) {
           pickRandomGesture();
         }
-        updateGesture(elapsed, delta);
+        updateGesture(elapsed);
 
         currentVrm.update(delta);
       }
@@ -183,17 +186,17 @@
     }
     animate();
 
-    // Poll Python server to check if AI is speaking
+    // Poll Python server — real word-synced mouth movement
     setInterval(async () => {
       try {
         const res = await fetch('http://localhost:5050/status');
         const data = await res.json();
+        isSpeaking = data.speaking;
         if (currentVrm) {
-          const mouthOpen = data.speaking ? (0.5 + Math.random() * 0.5) : 0;
-          currentVrm.expressionManager?.setValue('aa', mouthOpen);
+          currentVrm.expressionManager?.setValue('aa', data.mouth || 0);
         }
       } catch (e) {}
-    }, 150);
+    }, 100);
 
     window.addEventListener('resize', () => {
       camera.aspect = window.innerWidth / window.innerHeight;
