@@ -27,11 +27,11 @@ LANGUAGE_NAMES = {"en": "English", "hi": "Hindi", "kn": "Kannada"}
 
 whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8")
 
-avatar_state = {"speaking": False, "mouth": 0.0, "last_reply": ""}
+avatar_state = {"speaking": False, "mouth": 0.0, "emotion": "neutral", "last_reply": ""}
 
 def record_audio(filename="input.wav", duration=4, samplerate=16000):
     print("Listening... (speak now)")
-    audio = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype='int16')
+    audio = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype='int16', device=2)
     sd.wait()
     with wave.open(filename, 'wb') as wf:
         wf.setnchannels(1)
@@ -51,11 +51,27 @@ def detect_script_language(text):
 
 def listen():
     audio_file = record_audio()
-    segments, info = whisper_model.transcribe(audio_file, language=None)
-    text = " ".join([seg.text for seg in segments]).strip()
-    script_lang = detect_script_language(text)
-    final_lang = script_lang if script_lang else info.language
-    return text, final_lang
+
+    best_text = ""
+    best_lang = "en"
+    best_score = -999
+
+    for lang in ["en", "hi", "kn"]:
+        segments, info = whisper_model.transcribe(audio_file, language=lang)
+        segs = list(segments)
+        text = " ".join([s.text for s in segs]).strip()
+        if not text:
+            continue
+        avg_logprob = sum(s.avg_logprob for s in segs) / len(segs)
+        if avg_logprob > best_score:
+            best_score = avg_logprob
+            best_text = text
+            best_lang = lang
+
+    script_lang = detect_script_language(best_text)
+    final_lang = script_lang if script_lang else best_lang
+
+    return best_text, final_lang
 
 # ---- Speech + real word-timed lip sync ----
 async def speak(text, voice):
@@ -72,7 +88,7 @@ async def speak(text, voice):
                     f.write(chunk["data"])
                 elif chunk["type"] == "WordBoundary":
                     word_boundaries.append({
-                        "offset": chunk["offset"] / 10_000_000,   # to seconds
+                        "offset": chunk["offset"] / 10_000_000,
                         "duration": chunk["duration"] / 10_000_000
                     })
 
@@ -158,6 +174,25 @@ def extract_facts(user_msg, ai_msg):
     except Exception as e:
         print(f"(Fact extraction failed: {e})")
 
+def detect_emotion(text):
+    lowered = text.lower()
+    if "?" in text:
+        return "curious"
+    if "!" in text or any(w in lowered for w in ["great", "awesome", "love", "happy", "yay", "nice", "good"]):
+        return "happy"
+    if any(w in lowered for w in ["sorry", "sad", "unfortunately", "worried"]):
+        return "concerned"
+    return "neutral"
+
+def say_goodbye(lang_code):
+    goodbye_text = {
+        "en": "Goodbye! Take care.",
+        "hi": "अलविदा! अपना ख्याल रखना।",
+        "kn": "ವಿದಾಯ! ನಿಮ್ಮ ಬಗ್ಗೆ ಕಾಳಜಿ ವಹಿಸಿ."
+    }
+    text = goodbye_text.get(lang_code, goodbye_text["en"])
+    asyncio.run(speak(text, VOICE_MAP.get(lang_code, VOICE_MAP["en"])))
+
 def chat_loop():
     memory.init_db()
 
@@ -193,7 +228,9 @@ def chat_loop():
         if not user_input:
             continue
         if "quit" in user_input.lower() or "stop" in user_input.lower():
+            lang_code = detected if detected in VOICE_MAP else "en"
             print("Goodbye!")
+            say_goodbye(lang_code)
             break
 
         lang_code = detected if detected in VOICE_MAP else "en"
@@ -222,6 +259,7 @@ def chat_loop():
             keep_alive="30m"
         )
         ai_reply = response["message"]["content"]
+        avatar_state["emotion"] = detect_emotion(ai_reply)
         print(f"AI ({LANGUAGE_NAMES.get(lang_code, 'English')}): {ai_reply}\n")
 
         conversation.append({"role": "assistant", "content": ai_reply})

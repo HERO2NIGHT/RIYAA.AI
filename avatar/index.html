@@ -5,10 +5,20 @@
   <title>My AI Avatar</title>
   <style>
     body { margin: 0; overflow: hidden; background: #1a1a2e; cursor: pointer; }
-    canvas { display: block; }
+    canvas { display: none; }
+    #introVideo {
+      position: fixed; top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      object-fit: cover;
+      z-index: 10;
+    }
   </style>
 </head>
 <body>
+  <video id="introVideo" autoplay>
+    <source src="intro.mp4" type="video/mp4">
+  </video>
+
   <script type="importmap">
     {
       "imports": {
@@ -26,15 +36,24 @@
     import { VRMLoaderPlugin } from '@pixiv/three-vrm';
 
     const scene = new THREE.Scene();
+
+    const bgLoader = new THREE.TextureLoader();
+    bgLoader.load(
+      'background.png',
+      (texture) => { scene.background = texture; },
+      undefined,
+      (error) => console.log('No background.png found, using default color instead.')
+    );
+
     const camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.1, 20);
-    camera.position.set(0, 1.4, 2.5);
+    camera.position.set(0, 1.5, 1.0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(0, 1.2, 0);
+    controls.target.set(0, 1.5, 0);
     controls.update();
 
     const light = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -44,6 +63,7 @@
 
     let currentVrm = undefined;
     let isSpeaking = false;
+    let currentEmotion = "neutral";
 
     const loader = new GLTFLoader();
     loader.register((parser) => new VRMLoaderPlugin(parser));
@@ -52,8 +72,16 @@
       'avatar.vrm',
       (gltf) => {
         const vrm = gltf.userData.vrm;
+        vrm.scene.rotation.y = Math.PI;
         scene.add(vrm.scene);
         currentVrm = vrm;
+        window.currentVrm = vrm;
+
+        const leftUpperArm = vrm.humanoid.getNormalizedBoneNode('leftUpperArm');
+        const rightUpperArm = vrm.humanoid.getNormalizedBoneNode('rightUpperArm');
+        if (leftUpperArm) leftUpperArm.rotation.z = 1.3;
+        if (rightUpperArm) rightUpperArm.rotation.z = -1.3;
+
         console.log('Avatar loaded!');
       },
       (progress) => console.log('Loading...', (100 * progress.loaded / progress.total).toFixed(0), '%'),
@@ -68,81 +96,17 @@
     let nextBlinkAt = 2 + Math.random() * 3;
     const clock = new THREE.Clock();
 
-    let currentGesture = null;
-    let gestureStartTime = 0;
-    let gestureDuration = 0;
-    let gestureTimer = 0;
-    let nextGestureAt = 3 + Math.random() * 3;
-
-    const GESTURES = ['wave', 'wink', 'smile', 'lookAway', 'tease'];
-
-    function startGesture(name) {
-      currentGesture = name;
-      gestureStartTime = clock.getElapsedTime();
-      if (name === 'wave') gestureDuration = 2.2;
-      else if (name === 'wink') gestureDuration = 0.5;
-      else if (name === 'smile') gestureDuration = 2.5;
-      else if (name === 'lookAway') gestureDuration = 1.8;
-      else if (name === 'tease') gestureDuration = 1.2;
+    function idleNoise(elapsed, speed, seed) {
+      return Math.sin(elapsed * speed + seed) * 0.5 + Math.sin(elapsed * speed * 0.37 + seed * 2) * 0.5;
     }
 
-    function pickRandomGesture() {
-      const choice = GESTURES[Math.floor(Math.random() * GESTURES.length)];
-      startGesture(choice);
-    }
-
-    function resetGestureBones() {
-      const upperArm = getBone('rightUpperArm');
-      const lowerArm = getBone('rightLowerArm');
-      const head = getBone('head');
-      if (upperArm) upperArm.rotation.set(0, 0, 0);
-      if (lowerArm) lowerArm.rotation.set(0, 0, 0);
-      if (head) head.rotation.set(0, 0, 0);
-    }
-
-    function updateGesture(elapsed) {
-      if (!currentVrm || !currentGesture) return;
-      const t = elapsed - gestureStartTime;
-      const progress = Math.min(t / gestureDuration, 1);
-
-      if (currentGesture === 'wave') {
-        const upperArm = getBone('rightUpperArm');
-        const lowerArm = getBone('rightLowerArm');
-        if (upperArm && lowerArm) {
-          const raise = Math.min(progress / 0.2, 1);
-          const lowerPhase = progress > 0.8 ? (progress - 0.8) / 0.2 : 0;
-          const raiseAmt = progress > 0.8
-            ? THREE.MathUtils.lerp(-1.2, 0, lowerPhase)
-            : THREE.MathUtils.lerp(0, -1.2, raise);
-          upperArm.rotation.z = raiseAmt;
-          if (progress > 0.2 && progress < 0.8) {
-            lowerArm.rotation.z = -0.5 + Math.sin(t * 10) * 0.35;
-          }
-        }
-      } else if (currentGesture === 'wink') {
-        currentVrm.expressionManager?.setValue('blinkLeft', progress < 0.7 ? 1.0 : 0.0);
-      } else if (currentGesture === 'smile') {
-        currentVrm.expressionManager?.setValue('happy', Math.sin(progress * Math.PI));
-      } else if (currentGesture === 'lookAway') {
-        const head = getBone('head');
-        if (head) head.rotation.y = Math.sin(progress * Math.PI) * 0.3;
-      } else if (currentGesture === 'tease') {
-        currentVrm.expressionManager?.setValue('blinkLeft', progress < 0.6 ? 1.0 : 0.0);
-        currentVrm.expressionManager?.setValue('happy', Math.sin(progress * Math.PI));
-      }
-
-      if (progress >= 1) {
-        resetGestureBones();
-        currentVrm.expressionManager?.setValue('blinkLeft', 0.0);
-        currentVrm.expressionManager?.setValue('happy', 0.0);
-        currentGesture = null;
-        gestureTimer = 0;
-        nextGestureAt = 3 + Math.random() * 3;
-      }
-    }
+    // ---- Click = wink/tease (only interaction now) ----
+    let clickTease = null;
+    let clickTeaseStart = 0;
 
     renderer.domElement.addEventListener('click', () => {
-      if (!currentGesture) startGesture('tease');
+      clickTease = true;
+      clickTeaseStart = clock.getElapsedTime();
     });
 
     function animate() {
@@ -151,32 +115,56 @@
       const elapsed = clock.getElapsedTime();
 
       if (currentVrm) {
-        // breathing
         currentVrm.scene.position.y = Math.sin(elapsed * 1.2) * 0.01;
 
-        // subtle head bob while speaking, feels more human
         const head = getBone('head');
-        if (head && isSpeaking && currentGesture !== 'lookAway') {
-          head.rotation.x = Math.sin(elapsed * 6) * 0.03;
+        const spine = getBone('spine') || getBone('chest');
+
+        if (head) {
+          if (isSpeaking) {
+            head.rotation.x = Math.sin(elapsed * 6) * 0.025;
+            head.rotation.y = idleNoise(elapsed, 0.6, 1) * 0.04;
+          } else {
+            head.rotation.y = idleNoise(elapsed, 0.25, 1) * 0.08;
+            head.rotation.x = idleNoise(elapsed, 0.2, 5) * 0.03;
+          }
+        }
+        if (spine) {
+          spine.rotation.y = idleNoise(elapsed, 0.15, 3) * 0.03;
         }
 
-        if (currentGesture !== 'wink' && currentGesture !== 'tease') {
-          blinkTimer += delta;
-          if (blinkTimer > nextBlinkAt) {
-            currentVrm.expressionManager?.setValue('blink', 1.0);
-            if (blinkTimer > nextBlinkAt + 0.15) {
-              currentVrm.expressionManager?.setValue('blink', 0.0);
-              blinkTimer = 0;
-              nextBlinkAt = 2 + Math.random() * 3;
-            }
+        const leftUpperArm = getBone('leftUpperArm');
+        const rightUpperArm = getBone('rightUpperArm');
+        if (leftUpperArm) leftUpperArm.rotation.z = 1.3 + idleNoise(elapsed, 0.3, 7) * 0.03;
+        if (rightUpperArm) rightUpperArm.rotation.z = -1.3 + idleNoise(elapsed, 0.3, 9) * 0.03;
+
+        blinkTimer += delta;
+        if (blinkTimer > nextBlinkAt) {
+          currentVrm.expressionManager?.setValue('blink', 1.0);
+          if (blinkTimer > nextBlinkAt + 0.15) {
+            currentVrm.expressionManager?.setValue('blink', 0.0);
+            blinkTimer = 0;
+            nextBlinkAt = 2.5 + Math.random() * 3.5;
           }
         }
 
-        gestureTimer += delta;
-        if (!currentGesture && gestureTimer > nextGestureAt) {
-          pickRandomGesture();
+        let targetHappy = 0;
+        if (currentEmotion === "happy") targetHappy = 0.6;
+        if (currentEmotion === "curious") targetHappy = 0.15;
+        currentVrm.expressionManager?.setValue(
+          'happy',
+          THREE.MathUtils.lerp(currentVrm.expressionManager.getValue('happy') || 0, targetHappy, 0.05)
+        );
+
+        if (clickTease) {
+          const t = elapsed - clickTeaseStart;
+          const progress = Math.min(t / 1.0, 1);
+          currentVrm.expressionManager?.setValue('blinkLeft', progress < 0.6 ? 1.0 : 0.0);
+          if (progress >= 1) {
+            currentVrm.expressionManager?.setValue('blinkLeft', 0.0);
+            clickTease = null;
+          }
         }
-        updateGesture(elapsed);
 
         currentVrm.update(delta);
       }
@@ -186,12 +174,12 @@
     }
     animate();
 
-    // Poll Python server — real word-synced mouth movement
     setInterval(async () => {
       try {
         const res = await fetch('http://localhost:5050/status');
         const data = await res.json();
         isSpeaking = data.speaking;
+        currentEmotion = data.emotion || "neutral";
         if (currentVrm) {
           currentVrm.expressionManager?.setValue('aa', data.mouth || 0);
         }
@@ -203,6 +191,18 @@
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
     });
+
+    const introVideo = document.getElementById('introVideo');
+    const canvasEl = renderer.domElement;
+
+    function showAvatar() {
+      introVideo.style.display = 'none';
+      canvasEl.style.display = 'block';
+    }
+
+    introVideo.addEventListener('ended', showAvatar);
+    introVideo.addEventListener('error', showAvatar);
+    introVideo.addEventListener('click', showAvatar);
   </script>
 </body>
 </html>
