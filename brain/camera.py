@@ -50,6 +50,7 @@ def start_camera_thread(avatar_state):
                     direction = new_direction
 
                 if reversals >= 3 and (time.time() - last_wave_time) > 3:
+                    print("WAVE DETECTED!")   # <-- just a print for now, no avatar action yet
                     avatar_state["user_waving"] = True
                     last_wave_time = time.time()
                     x_history.clear()

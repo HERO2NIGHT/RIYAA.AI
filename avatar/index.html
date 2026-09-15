@@ -6,18 +6,53 @@
   <style>
     body { margin: 0; overflow: hidden; background: #1a1a2e; cursor: pointer; }
     canvas { display: none; }
-    #introVideo {
+    #introVideo, #triggerVideo {
       position: fixed; top: 0; left: 0;
       width: 100vw; height: 100vh;
       object-fit: cover;
       z-index: 10;
     }
+    #triggerVideo { display: none; }
+    #panelToggle {
+      position: fixed; bottom: 20px; right: 20px; z-index: 21;
+      padding: 10px 16px; font-size: 13px; border-radius: 6px;
+      border: none; background: #333; color: white; cursor: pointer;
+    }
+    #testPanel {
+      position: fixed; bottom: 65px; right: 20px; z-index: 20;
+      display: none; flex-direction: column; gap: 8px;
+      background: rgba(0,0,0,0.75); padding: 14px; border-radius: 10px;
+      font-family: sans-serif;
+    }
+    #testPanel.open { display: flex; }
+    #testPanel button {
+      padding: 10px 16px; font-size: 13px; border-radius: 6px;
+      border: none; background: #4a4a8a; color: white; cursor: pointer;
+    }
+    #testPanel button:hover { background: #5c5cad; }
+    #testPanel button.active { background: #7a4ac8; }
   </style>
 </head>
 <body>
   <video id="introVideo" autoplay>
     <source src="intro.mp4" type="video/mp4">
   </video>
+
+  <video id="triggerVideo">
+    <source src="letsgo.mp4" type="video/mp4">
+  </video>
+
+  <button id="panelToggle">⚙ Features</button>
+  <div id="testPanel">
+    <button id="btnSpeak">Talking Gesture</button>
+    <button id="btnWink">Wink / Tease</button>
+    <button id="btnWave">Wave Reaction (Smile)</button>
+    <button id="btnHappy">Happy Emotion</button>
+    <button id="btnCurious">Curious Emotion</button>
+    <button id="btnNeutral">Reset to Neutral</button>
+    <button id="btnIntro">Replay Intro Video</button>
+    <button id="btnTrigger">Play "Let's Go" Video</button>
+  </div>
 
   <script type="importmap">
     {
@@ -64,6 +99,7 @@
     let currentVrm = undefined;
     let isSpeaking = false;
     let currentEmotion = "neutral";
+    let manualEmotionOverride = null;
 
     const loader = new GLTFLoader();
     loader.register((parser) => new VRMLoaderPlugin(parser));
@@ -100,7 +136,6 @@
       return Math.sin(elapsed * speed + seed) * 0.5 + Math.sin(elapsed * speed * 0.37 + seed * 2) * 0.5;
     }
 
-    // ---- Click = wink/tease (only interaction now) ----
     let clickTease = null;
     let clickTeaseStart = 0;
 
@@ -108,6 +143,9 @@
       clickTease = true;
       clickTeaseStart = clock.getElapsedTime();
     });
+
+    let waveReactionUntil = 0;
+    let manualSpeaking = false;
 
     function animate() {
       requestAnimationFrame(animate);
@@ -119,9 +157,10 @@
 
         const head = getBone('head');
         const spine = getBone('spine') || getBone('chest');
+        const speakingNow = manualSpeaking || isSpeaking;
 
         if (head) {
-          if (isSpeaking) {
+          if (speakingNow) {
             head.rotation.x = Math.sin(elapsed * 6) * 0.025;
             head.rotation.y = idleNoise(elapsed, 0.6, 1) * 0.04;
           } else {
@@ -135,8 +174,18 @@
 
         const leftUpperArm = getBone('leftUpperArm');
         const rightUpperArm = getBone('rightUpperArm');
+        const rightLowerArm = getBone('rightLowerArm');
+
         if (leftUpperArm) leftUpperArm.rotation.z = 1.3 + idleNoise(elapsed, 0.3, 7) * 0.03;
-        if (rightUpperArm) rightUpperArm.rotation.z = -1.3 + idleNoise(elapsed, 0.3, 9) * 0.03;
+
+        if (speakingNow) {
+          const gestureLift = 0.35 + Math.abs(idleNoise(elapsed, 0.5, 11)) * 0.25;
+          if (rightUpperArm) rightUpperArm.rotation.z = -1.3 + gestureLift + idleNoise(elapsed, 0.8, 13) * 0.08;
+          if (rightLowerArm) rightLowerArm.rotation.z = -0.4 + idleNoise(elapsed, 0.9, 17) * 0.25;
+        } else {
+          if (rightUpperArm) rightUpperArm.rotation.z = THREE.MathUtils.lerp(rightUpperArm.rotation.z, -1.3 + idleNoise(elapsed, 0.3, 9) * 0.03, 0.05);
+          if (rightLowerArm) rightLowerArm.rotation.z = THREE.MathUtils.lerp(rightLowerArm.rotation.z, 0, 0.05);
+        }
 
         blinkTimer += delta;
         if (blinkTimer > nextBlinkAt) {
@@ -148,12 +197,14 @@
           }
         }
 
+        const activeEmotion = manualEmotionOverride || currentEmotion;
         let targetHappy = 0;
-        if (currentEmotion === "happy") targetHappy = 0.6;
-        if (currentEmotion === "curious") targetHappy = 0.15;
+        if (activeEmotion === "happy") targetHappy = 0.6;
+        if (activeEmotion === "curious") targetHappy = 0.15;
+        if (elapsed < waveReactionUntil) targetHappy = 0.8;
         currentVrm.expressionManager?.setValue(
           'happy',
-          THREE.MathUtils.lerp(currentVrm.expressionManager.getValue('happy') || 0, targetHappy, 0.05)
+          THREE.MathUtils.lerp(currentVrm.expressionManager.getValue('happy') || 0, targetHappy, 0.08)
         );
 
         if (clickTease) {
@@ -179,9 +230,14 @@
         const res = await fetch('http://localhost:5050/status');
         const data = await res.json();
         isSpeaking = data.speaking;
-        currentEmotion = data.emotion || "neutral";
+        if (!manualEmotionOverride) {
+          currentEmotion = data.emotion || "neutral";
+        }
         if (currentVrm) {
-          currentVrm.expressionManager?.setValue('aa', data.mouth || 0);
+          currentVrm.expressionManager?.setValue('aa', manualSpeaking ? 0.6 : (data.mouth || 0));
+        }
+        if (data.user_waving) {
+          waveReactionUntil = clock.getElapsedTime() + 2.0;
         }
       } catch (e) {}
     }, 100);
@@ -201,8 +257,97 @@
     }
 
     introVideo.addEventListener('ended', showAvatar);
-    introVideo.addEventListener('error', showAvatar);
+    introVideo.addEventListener('error', (e) => {
+      console.error('Intro video failed to load:', e);
+      showAvatar();
+    });
     introVideo.addEventListener('click', showAvatar);
+
+    // ---- "Let's go" trigger video, with error logging ----
+    const triggerVideo = document.getElementById('triggerVideo');
+    let videoPlaying = false;
+
+    triggerVideo.addEventListener('error', (e) => {
+      console.error('LETSGO VIDEO ERROR:', triggerVideo.error, e);
+    });
+    triggerVideo.addEventListener('loadeddata', () => {
+    console.log('letsgo.mp4 loaded successfully, ready to play');
+    });
+
+    function playTriggerVideo() {
+      videoPlaying = true;
+      triggerVideo.style.display = 'block';
+      triggerVideo.currentTime = 0;
+      const playPromise = triggerVideo.play();
+      if (playPromise) {
+        playPromise.catch(err => {
+          console.error('Video play() was blocked or failed:', err);
+        });
+      }
+    }
+
+    // ---- Panel toggle ----
+    const panelToggle = document.getElementById('panelToggle');
+    const testPanel = document.getElementById('testPanel');
+    panelToggle.addEventListener('click', () => {
+      testPanel.classList.toggle('open');
+    });
+
+    // ---- Test panel buttons ----
+    const btnSpeak = document.getElementById('btnSpeak');
+    btnSpeak.addEventListener('click', () => {
+      manualSpeaking = !manualSpeaking;
+      btnSpeak.classList.toggle('active', manualSpeaking);
+    });
+
+    document.getElementById('btnWink').addEventListener('click', () => {
+      clickTease = true;
+      clickTeaseStart = clock.getElapsedTime();
+    });
+
+    document.getElementById('btnWave').addEventListener('click', () => {
+      waveReactionUntil = clock.getElapsedTime() + 2.0;
+    });
+
+    const btnHappy = document.getElementById('btnHappy');
+    const btnCurious = document.getElementById('btnCurious');
+
+    btnHappy.addEventListener('click', () => {
+      manualEmotionOverride = manualEmotionOverride === "happy" ? null : "happy";
+      btnHappy.classList.toggle('active', manualEmotionOverride === "happy");
+      btnCurious.classList.remove('active');
+    });
+
+    btnCurious.addEventListener('click', () => {
+      manualEmotionOverride = manualEmotionOverride === "curious" ? null : "curious";
+      btnCurious.classList.toggle('active', manualEmotionOverride === "curious");
+      btnHappy.classList.remove('active');
+    });
+
+    document.getElementById('btnNeutral').addEventListener('click', () => {
+      manualEmotionOverride = null;
+      btnHappy.classList.remove('active');
+      btnCurious.classList.remove('active');
+    });
+
+    document.getElementById('btnIntro').addEventListener('click', () => {
+      introVideo.style.display = 'block';
+      canvasEl.style.display = 'none';
+      introVideo.currentTime = 0;
+      introVideo.play();
+    });
+
+    document.getElementById('btnTrigger').addEventListener('click', playTriggerVideo);
+
+    setInterval(async () => {
+      try {
+        const res = await fetch('http://localhost:5050/status');
+        const data = await res.json();
+        if (data.play_video && !videoPlaying) {
+          playTriggerVideo();
+        }
+      } catch (e) {}
+    }, 300);
   </script>
 </body>
 </html>

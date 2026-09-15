@@ -1,14 +1,16 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 import logging
 import threading
 import time
+import numpy as np
 import ollama
 import asyncio
 import edge_tts
 import pygame
 import os
 import wave
+import camera
 import sounddevice as sd
 from faster_whisper import WhisperModel
 from ddgs import DDGS
@@ -27,7 +29,23 @@ LANGUAGE_NAMES = {"en": "English", "hi": "Hindi", "kn": "Kannada"}
 
 whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8")
 
-avatar_state = {"speaking": False, "mouth": 0.0, "emotion": "neutral", "last_reply": ""}
+avatar_state = {
+    "speaking": False, "mouth": 0.0, "emotion": "neutral",
+    "user_waving": False, "last_reply": "", "play_video": False
+}
+
+is_awake = False
+
+CLAP_AMPLITUDE_THRESHOLD = 20000
+CLAP_MAX_DURATION_SAMPLES = int(0.15 * 16000)
+
+def detect_clap(audio_data):
+    audio_data = np.abs(audio_data.flatten())
+    above = np.where(audio_data > CLAP_AMPLITUDE_THRESHOLD)[0]
+    if len(above) == 0:
+        return False
+    spread = above[-1] - above[0]
+    return spread < CLAP_MAX_DURATION_SAMPLES and len(above) > 5
 
 def record_audio(filename="input.wav", duration=4, samplerate=16000):
     print("Listening... (speak now)")
@@ -39,6 +57,27 @@ def record_audio(filename="input.wav", duration=4, samplerate=16000):
         wf.setframerate(samplerate)
         wf.writeframes(audio.tobytes())
     return filename
+
+def listen_for_wake():
+    """While asleep: check each short clip for a clap OR the phrase 'wake up'."""
+    audio = sd.rec(int(1.5 * 16000), samplerate=16000, channels=1, dtype='int16', device=2)
+    sd.wait()
+
+    if detect_clap(audio):
+        return True, "clap"
+
+    with wave.open("wake_check.wav", "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(audio.tobytes())
+
+    segments, info = whisper_model.transcribe("wake_check.wav", language="en")
+    text = " ".join([s.text for s in segments]).strip().lower()
+    if "wake up" in text:
+        return True, "voice"
+
+    return False, None
 
 def detect_script_language(text):
     for char in text:
@@ -73,7 +112,6 @@ def listen():
 
     return best_text, final_lang
 
-# ---- Speech + real word-timed lip sync ----
 async def speak(text, voice):
     if not text.strip():
         return
@@ -129,6 +167,11 @@ async def speak(text, voice):
 @app.route("/status")
 def status():
     return jsonify(avatar_state)
+
+@app.route("/video_done", methods=["POST"])
+def video_done():
+    avatar_state["play_video"] = False
+    return jsonify({"ok": True})
 
 def needs_fact_check(text):
     factual_triggers = [
@@ -194,6 +237,7 @@ def say_goodbye(lang_code):
     asyncio.run(speak(text, VOICE_MAP.get(lang_code, VOICE_MAP["en"])))
 
 def chat_loop():
+    global is_awake
     memory.init_db()
 
     known_facts = memory.load_facts()
@@ -214,26 +258,40 @@ def chat_loop():
             )
         }
     ]
-
     conversation.extend(memory.load_recent_history(limit=10))
 
-    print("Your AI is ready. Speak, or say 'quit' or 'stop' to exit.\n")
+    print("Sleeping... clap or say 'wake up' to activate.\n")
 
     turn_count = 0
 
     while True:
+        if not is_awake:
+            woke, method = listen_for_wake()
+            if woke:
+                is_awake = True
+                print(f"Awake! (triggered by {method})\n")
+                asyncio.run(speak("I'm here!", VOICE_MAP["en"]))
+            continue
+
         user_input, detected = listen()
         print(f"You said ({detected}): {user_input}")
 
         if not user_input:
             continue
-        if "quit" in user_input.lower() or "stop" in user_input.lower():
-            lang_code = detected if detected in VOICE_MAP else "en"
-            print("Goodbye!")
-            say_goodbye(lang_code)
-            break
 
         lang_code = detected if detected in VOICE_MAP else "en"
+
+        if "quit" in user_input.lower() or "stop" in user_input.lower():
+            print("Goodbye!")
+            say_goodbye(lang_code)
+            is_awake = False
+            print("Sleeping... clap or say 'wake up' to activate.\n")
+            continue
+
+        if "let's go" in user_input.lower() or "lets go" in user_input.lower():
+            print("Playing video...")
+            avatar_state["play_video"] = True
+            continue
 
         if needs_fact_check(user_input):
             print("Checking facts...")
@@ -274,4 +332,5 @@ def chat_loop():
 
 if __name__ == "__main__":
     threading.Thread(target=chat_loop, daemon=True).start()
+    threading.Thread(target=camera.start_camera_thread, args=(avatar_state,), daemon=True).start()
     app.run(port=5050)

@@ -1,0 +1,28 @@
+Project Status Summary
+
+Setup: Windows laptop, i3-7020U, 8GB RAM, no dedicated GPU. Python 3.11 (via py -3.11), Ollama with llama3.2:3b, Node.js installed. Project folder: C:\Users\dell\Desktop\AI-Avatar-Project\ with brain/ and avatar/ subfolders.
+
+Working features:
+
+Voice chat in English, Hindi, Kannada (3-pass Whisper detection + script correction)
+Short, sweet, personality-driven replies (1 sentence, num_predict: 25)
+Fact-checking via DuckDuckGo search (ddgs package) before factual answers
+Persistent memory across sessions (SQLite via memory.py) — remembers facts about the user
+3D VRM avatar (Three.js) with: relaxed idle arm pose, natural continuous sway (not random gestures), word-synced lip movement, emotion-reactive smiling, click-to-wink, custom background image, zoomed face-forward camera framing, intro video before avatar appears
+Says goodbye out loud when "stop"/"quit" is said
+
+Parked for later: Camera-based wave detection and avatar waving back (camera.py was drafted but caused issues — currently removed from server.py). Double-tap-to-wave was also removed after rigging issues (arm rotation didn't match this avatar's skeleton).
+
+Not yet built: Wake word ("wake up" to activate), "let's go" to play a custom video on command.
+
+How to launch (every time):
+
+Terminal 1: cd C:\Users\dell\Desktop\AI-Avatar-Project\avatar && py -3.11 -m http.server 8000
+Terminal 2: cd C:\Users\dell\Desktop\AI-Avatar-Project\brain && py -3.11 server.py
+Browser: http://localhost:8000 (fresh tab each time)
+
+Ollama app must be open in background.
+
+Files: server.py (main brain/voice/Flask server), index.html (avatar renderer), memory.py (SQLite memory), corrections.json (speech correction dictionary, currently empty), avatar.vrm, background.png, intro.mp4 — all in their respective folders.
+
+If you start a new chat, paste this summary along with your current server.py and index.html (copy them from VS Code), and whoever's helping you can pick up instantly without re-explaining everything.
