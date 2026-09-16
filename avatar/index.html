@@ -11,8 +11,8 @@
       width: 100vw; height: 100vh;
       object-fit: cover;
       z-index: 10;
+      display: none;
     }
-    #triggerVideo { display: none; }
     #panelToggle {
       position: fixed; bottom: 20px; right: 20px; z-index: 21;
       padding: 10px 16px; font-size: 13px; border-radius: 6px;
@@ -42,7 +42,7 @@
     <source src="letsgo.mp4" type="video/mp4">
   </video>
 
-  <button id="panelToggle">⚙ Features</button>
+  <button id="panelToggle">⚙ Feature Options</button>
   <div id="testPanel">
     <button id="btnSpeak">Talking Gesture</button>
     <button id="btnWink">Wink / Tease</button>
@@ -225,6 +225,44 @@
     }
     animate();
 
+    // ---- Intro video plays automatically first, then avatar appears ----
+    const introVideo = document.getElementById('introVideo');
+    const canvasEl = renderer.domElement;
+
+    function showAvatar() {
+      introVideo.style.display = 'none';
+      canvasEl.style.display = 'block';
+    }
+
+    introVideo.addEventListener('error', (e) => {
+      console.error('INTRO VIDEO ERROR:', introVideo.error, e);
+      showAvatar(); // fall back to avatar if video fails
+    });
+    introVideo.addEventListener('ended', showAvatar);
+    introVideo.addEventListener('click', showAvatar);
+    introVideo.style.display = 'block';
+
+    // ---- "Let's go" trigger video ----
+    const triggerVideo = document.getElementById('triggerVideo');
+    let videoPlaying = false;
+
+    triggerVideo.addEventListener('error', (e) => {
+      console.error('LETSGO VIDEO ERROR:', triggerVideo.error, e);
+    });
+    triggerVideo.addEventListener('ended', async () => {
+      triggerVideo.style.display = 'none';
+      videoPlaying = false;
+      try { await fetch('http://localhost:5050/video_done', { method: 'POST' }); } catch (e) {}
+    });
+
+    function playTriggerVideo() {
+      videoPlaying = true;
+      triggerVideo.style.display = 'block';
+      triggerVideo.currentTime = 0;
+      const p = triggerVideo.play();
+      if (p) p.catch(err => console.error('Video play() was blocked or failed:', err));
+    }
+
     setInterval(async () => {
       try {
         const res = await fetch('http://localhost:5050/status');
@@ -239,6 +277,9 @@
         if (data.user_waving) {
           waveReactionUntil = clock.getElapsedTime() + 2.0;
         }
+        if (data.play_video && !videoPlaying) {
+          playTriggerVideo();
+        }
       } catch (e) {}
     }, 100);
 
@@ -248,52 +289,12 @@
       renderer.setSize(window.innerWidth, window.innerHeight);
     });
 
-    const introVideo = document.getElementById('introVideo');
-    const canvasEl = renderer.domElement;
-
-    function showAvatar() {
-      introVideo.style.display = 'none';
-      canvasEl.style.display = 'block';
-    }
-
-    introVideo.addEventListener('ended', showAvatar);
-    introVideo.addEventListener('error', (e) => {
-      console.error('Intro video failed to load:', e);
-      showAvatar();
-    });
-    introVideo.addEventListener('click', showAvatar);
-
-    // ---- "Let's go" trigger video, with error logging ----
-    const triggerVideo = document.getElementById('triggerVideo');
-    let videoPlaying = false;
-
-    triggerVideo.addEventListener('error', (e) => {
-      console.error('LETSGO VIDEO ERROR:', triggerVideo.error, e);
-    });
-    triggerVideo.addEventListener('loadeddata', () => {
-    console.log('letsgo.mp4 loaded successfully, ready to play');
-    });
-
-    function playTriggerVideo() {
-      videoPlaying = true;
-      triggerVideo.style.display = 'block';
-      triggerVideo.currentTime = 0;
-      const playPromise = triggerVideo.play();
-      if (playPromise) {
-        playPromise.catch(err => {
-          console.error('Video play() was blocked or failed:', err);
-        });
-      }
-    }
-
-    // ---- Panel toggle ----
     const panelToggle = document.getElementById('panelToggle');
     const testPanel = document.getElementById('testPanel');
     panelToggle.addEventListener('click', () => {
       testPanel.classList.toggle('open');
     });
 
-    // ---- Test panel buttons ----
     const btnSpeak = document.getElementById('btnSpeak');
     btnSpeak.addEventListener('click', () => {
       manualSpeaking = !manualSpeaking;
@@ -338,16 +339,6 @@
     });
 
     document.getElementById('btnTrigger').addEventListener('click', playTriggerVideo);
-
-    setInterval(async () => {
-      try {
-        const res = await fetch('http://localhost:5050/status');
-        const data = await res.json();
-        if (data.play_video && !videoPlaying) {
-          playTriggerVideo();
-        }
-      } catch (e) {}
-    }, 300);
   </script>
 </body>
 </html>

@@ -1,8 +1,9 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
 from flask_cors import CORS
 import logging
 import threading
 import time
+import json
 import numpy as np
 import ollama
 import asyncio
@@ -36,8 +37,24 @@ avatar_state = {
 
 is_awake = False
 
+CORRECTIONS_PATH = os.path.join(os.path.dirname(__file__), "corrections.json")
 CLAP_AMPLITUDE_THRESHOLD = 20000
 CLAP_MAX_DURATION_SAMPLES = int(0.15 * 16000)
+
+def load_corrections():
+    try:
+        with open(CORRECTIONS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"en": {}, "hi": {}, "kn": {}}
+
+def apply_corrections(text, lang):
+    corrections = load_corrections()
+    lang_map = corrections.get(lang, {})
+    for wrong, right in lang_map.items():
+        if wrong.lower() in text.lower():
+            text = text.replace(wrong, right)
+    return text
 
 def detect_clap(audio_data):
     audio_data = np.abs(audio_data.flatten())
@@ -47,7 +64,7 @@ def detect_clap(audio_data):
     spread = above[-1] - above[0]
     return spread < CLAP_MAX_DURATION_SAMPLES and len(above) > 5
 
-def record_audio(filename="input.wav", duration=4, samplerate=16000):
+def record_audio(filename="input.wav", duration=5, samplerate=16000):
     print("Listening... (speak now)")
     audio = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype='int16', device=2)
     sd.wait()
@@ -59,7 +76,6 @@ def record_audio(filename="input.wav", duration=4, samplerate=16000):
     return filename
 
 def listen_for_wake():
-    """While asleep: check each short clip for a clap OR the phrase 'wake up'."""
     audio = sd.rec(int(1.5 * 16000), samplerate=16000, channels=1, dtype='int16', device=2)
     sd.wait()
 
@@ -110,7 +126,9 @@ def listen():
     script_lang = detect_script_language(best_text)
     final_lang = script_lang if script_lang else best_lang
 
-    return best_text, final_lang
+    final_text = apply_corrections(best_text, final_lang)
+
+    return final_text, final_lang
 
 async def speak(text, voice):
     if not text.strip():
