@@ -99,7 +99,7 @@ Make sure the Ollama app is running in the background before starting Terminal 2
 
 ### One-click launch (optional)
 
-Create a `start.bat` file in the project root:
+Create a `Launch.bat` file in the project root:
 ```bat
 @echo off
 start "Avatar Server" cmd /k "cd /d %~dp0avatar && py -3.11 -m http.server 8000"
@@ -144,6 +144,3 @@ Double-click it to launch everything at once.
 
 Built end-to-end in a short sprint, with help from Claude (Anthropic) for architecture, debugging, and implementation guidance throughout.
 
-## License
-
-Add your preferred license here (e.g. MIT) before making the repository public.
