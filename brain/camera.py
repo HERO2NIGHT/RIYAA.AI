@@ -4,8 +4,21 @@ import time
 
 mp_hands = mp.solutions.hands
 
+def find_camera_device(max_check=4):
+    for i in range(max_check):
+        cap = cv2.VideoCapture(i)
+        if cap.isOpened():
+            ret, frame = cap.read()
+            cap.release()
+            if ret:
+                return i
+    return 0
+
+CAM_DEVICE = find_camera_device()
+
 def start_camera_thread(avatar_state):
-    cap = cv2.VideoCapture(0)
+    print(f"Using camera device index {CAM_DEVICE}")
+    cap = cv2.VideoCapture(CAM_DEVICE)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
@@ -50,7 +63,6 @@ def start_camera_thread(avatar_state):
                     direction = new_direction
 
                 if reversals >= 3 and (time.time() - last_wave_time) > 3:
-                    print("WAVE DETECTED!")   # <-- just a print for now, no avatar action yet
                     avatar_state["user_waving"] = True
                     last_wave_time = time.time()
                     x_history.clear()

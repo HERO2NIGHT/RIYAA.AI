@@ -25,6 +25,22 @@ log.setLevel(logging.ERROR)
 
 pygame.mixer.init()
 
+def find_mic_device():
+    devices = sd.query_devices()
+    for i, d in enumerate(devices):
+        if d['max_input_channels'] > 0 and 'droidcam' in d['name'].lower():
+            print(f"Using DroidCam mic (device {i}: {d['name']})")
+            return i
+    for i, d in enumerate(devices):
+        name = d['name'].lower()
+        if d['max_input_channels'] > 0 and 'microphone' in name and 'stereo mix' not in name:
+            print(f"Using laptop mic (device {i}: {d['name']})")
+            return i
+    print("No specific mic found, using system default input.")
+    return None
+
+MIC_DEVICE = find_mic_device()
+
 VOICE_MAP = {"en": "en-US-AriaNeural", "hi": "hi-IN-SwaraNeural", "kn": "kn-IN-SapnaNeural"}
 LANGUAGE_NAMES = {"en": "English", "hi": "Hindi", "kn": "Kannada"}
 
@@ -35,11 +51,9 @@ avatar_state = {
     "user_waving": False, "last_reply": "", "play_video": False
 }
 
-is_awake = False
+is_awake = True
 
 CORRECTIONS_PATH = os.path.join(os.path.dirname(__file__), "corrections.json")
-CLAP_AMPLITUDE_THRESHOLD = 20000
-CLAP_MAX_DURATION_SAMPLES = int(0.15 * 16000)
 
 def load_corrections():
     try:
@@ -56,17 +70,9 @@ def apply_corrections(text, lang):
             text = text.replace(wrong, right)
     return text
 
-def detect_clap(audio_data):
-    audio_data = np.abs(audio_data.flatten())
-    above = np.where(audio_data > CLAP_AMPLITUDE_THRESHOLD)[0]
-    if len(above) == 0:
-        return False
-    spread = above[-1] - above[0]
-    return spread < CLAP_MAX_DURATION_SAMPLES and len(above) > 5
-
-def record_audio(filename="input.wav", duration=5, samplerate=16000):
+def record_audio(filename="input.wav", duration=3, samplerate=16000):
     print("Listening... (speak now)")
-    audio = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype='int16', device=2)
+    audio = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype='int16', device=MIC_DEVICE)
     sd.wait()
     with wave.open(filename, 'wb') as wf:
         wf.setnchannels(1)
@@ -74,26 +80,6 @@ def record_audio(filename="input.wav", duration=5, samplerate=16000):
         wf.setframerate(samplerate)
         wf.writeframes(audio.tobytes())
     return filename
-
-def listen_for_wake():
-    audio = sd.rec(int(1.5 * 16000), samplerate=16000, channels=1, dtype='int16', device=2)
-    sd.wait()
-
-    if detect_clap(audio):
-        return True, "clap"
-
-    with wave.open("wake_check.wav", "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(16000)
-        wf.writeframes(audio.tobytes())
-
-    segments, info = whisper_model.transcribe("wake_check.wav", language="en")
-    text = " ".join([s.text for s in segments]).strip().lower()
-    if "wake up" in text:
-        return True, "voice"
-
-    return False, None
 
 def detect_script_language(text):
     for char in text:
@@ -107,26 +93,13 @@ def detect_script_language(text):
 def listen():
     audio_file = record_audio()
 
-    best_text = ""
-    best_lang = "en"
-    best_score = -999
+    segments, info = whisper_model.transcribe(audio_file, language=None)
+    text = " ".join([s.text for s in segments]).strip()
 
-    for lang in ["en", "hi", "kn"]:
-        segments, info = whisper_model.transcribe(audio_file, language=lang)
-        segs = list(segments)
-        text = " ".join([s.text for s in segs]).strip()
-        if not text:
-            continue
-        avg_logprob = sum(s.avg_logprob for s in segs) / len(segs)
-        if avg_logprob > best_score:
-            best_score = avg_logprob
-            best_text = text
-            best_lang = lang
+    script_lang = detect_script_language(text)
+    final_lang = script_lang if script_lang else info.language
 
-    script_lang = detect_script_language(best_text)
-    final_lang = script_lang if script_lang else best_lang
-
-    final_text = apply_corrections(best_text, final_lang)
+    final_text = apply_corrections(text, final_lang)
 
     return final_text, final_lang
 
@@ -255,7 +228,6 @@ def say_goodbye(lang_code):
     asyncio.run(speak(text, VOICE_MAP.get(lang_code, VOICE_MAP["en"])))
 
 def chat_loop():
-    global is_awake
     memory.init_db()
 
     known_facts = memory.load_facts()
@@ -278,19 +250,11 @@ def chat_loop():
     ]
     conversation.extend(memory.load_recent_history(limit=10))
 
-    print("Sleeping... clap or say 'wake up' to activate.\n")
+    print("Your AI is ready. Speak, or say 'quit'/'stop' to exit.\n")
 
     turn_count = 0
 
     while True:
-        if not is_awake:
-            woke, method = listen_for_wake()
-            if woke:
-                is_awake = True
-                print(f"Awake! (triggered by {method})\n")
-                asyncio.run(speak("I'm here!", VOICE_MAP["en"]))
-            continue
-
         user_input, detected = listen()
         print(f"You said ({detected}): {user_input}")
 
@@ -302,8 +266,6 @@ def chat_loop():
         if "quit" in user_input.lower() or "stop" in user_input.lower():
             print("Goodbye!")
             say_goodbye(lang_code)
-            is_awake = False
-            print("Sleeping... clap or say 'wake up' to activate.\n")
             continue
 
         if "let's go" in user_input.lower() or "lets go" in user_input.lower():
@@ -311,7 +273,7 @@ def chat_loop():
             avatar_state["play_video"] = True
             continue
 
-        if needs_fact_check(user_input):
+        if False and needs_fact_check(user_input):
             print("Checking facts...")
             facts = search_facts(user_input)
             if facts:
@@ -331,7 +293,7 @@ def chat_loop():
         response = ollama.chat(
             model="llama3.2:3b",
             messages=conversation,
-            options={"num_predict": 25},
+            options={"num_predict": 12},
             keep_alive="30m"
         )
         ai_reply = response["message"]["content"]
